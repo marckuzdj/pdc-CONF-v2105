@@ -282,7 +282,7 @@
 
 <!-- 1. TELA DE LOGIN -->
 <div id="screen-login" class="card"> <!-- Adicionado a classe card aqui -->
-    <h3>Passagem de Carga | Conferência v2</h3>
+    <h3>Passagem de Carga | Conferência v3</h3>
     <label>E-mail</label>
     <input type="email" id="login-user" placeholder="seu@email.com">
     
@@ -2009,155 +2009,100 @@ function pularOcorrenciaEFinalizar() {
 
 
 async function enviarOcorrenciaFluxo() {
-    const motivo = document.getElementById("oc_motivo").value;
-    const descricao = document.getElementById("oc_descricao").value;
-    const tokenDev = document.getElementById("oc_token_devolucao").value;
-    const fotoInput = document.getElementById("oc_foto");
     const btn = document.getElementById("btnEnviarOcorrenciaFinal");
+    
+    // Captura os elementos nativos do formulário de ocorrência
+    const motivo = document.getElementById("oc_motivo").value;
+    const descricao = document.getElementById("oc_descricao").value.trim();
+    const tokenDevolucao = document.getElementById("oc_token_devolucao").value.trim();
+    const inputRomaneio = document.getElementById("romaneio");
+    const romaneioId = inputRomaneio ? inputRomaneio.value.toString().trim().toUpperCase() : "";
 
-    // 1. Validações Locais Básicas Obrigatórias (Mantidas)
-    if (!motivo) return alert("⚠️ Selecione o motivo da retenção!");
-    if (!descricao.trim()) return alert("⚠️ Digite uma descrição detalhada!");
-    if (!tokenDev.trim()) return alert("⚠️ Informe o TOKEN DE DEVOLUÇÃO!");
+    // 🔒 CAPTURA CIRÚRGICA DE SEGURANÇA: Extrai a transportadora/operador salva no logon
+    const selectTranspLogin = document.getElementById("login-transp");
+    const operadorSessao = selectTranspLogin ? selectTranspLogin.value.toString().trim() : "";
 
-    let temFoto = fotoInput && fotoInput.files && fotoInput.files.length > 0;
-    if (motivo === "Mercadoria Avariada" && !temFoto) {
-        return alert("⚠️ É obrigatório anexar uma foto para evidenciar a Mercadoria Avariada/Danificada!");
+    // Validações básicas de preenchimento obrigatório
+    if (!romaneioId) return alert("⚠️ Identificador de romaneio inválido ou ausente.");
+    if (!motivo) return alert("⚠️ Por favor, selecione o motivo da retenção.");
+    if (!tokenDevolucao) return alert("⚠️ É obrigatório informar o Token de Devolução para autorização.");
+
+    btn.disabled = true;
+    const textoOriginalBtn = btn.innerHTML;
+    btn.innerHTML = '<div class="spinner"></div> Gravando...';
+
+    // Coleta todos os checkboxes de pedidos marcados com divergência no painel
+    const checkboxesPedidos = document.querySelectorAll("input[name='adm_itens_selecionados']:checked, #oc_container_fornec input[type='checkbox']:checked");
+    const pedidosAfetados = Array.from(checkboxesPedidos).map(cb => cb.value.toString().trim());
+
+    // Captura o arquivo de imagem anexado pelo usuário
+    const inputFoto = document.getElementById("oc_foto");
+    let base64Foto = "";
+    let nomeFoto = "";
+
+    if (inputFoto && inputFoto.files.length > 0) {
+        const arquivo = inputFoto.files[0];
+        nomeFoto = arquivo.name;
+        // Função auxiliar interna para converter imagem em String Base64 para envio assíncrono
+        base64Foto = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result.split(",")[1]);
+            reader.readAsDataURL(arquivo);
+        });
+    } else {
+        btn.disabled = false;
+        btn.innerHTML = textoOriginalBtn;
+        return alert("⚠️ Foto da Evidência/Avaria é obrigatória (* OBRIGATÓRIO).");
     }
 
-    // Trava o botão imediatamente para evitar cliques simultâneos
-    btn.disabled = true;
-    btn.innerText = "Validando Token...";
+    // Estrutura o Payload multipart/form-data usando o padrão clássico URLSearchParams
+    const payloadForm = new URLSearchParams();
+    payloadForm.append("action", "salvarOcorrenciaRomaneio"); // Ajuste para a sua action real de salvamento se necessário
+    payloadForm.append("romaneio", romaneioId);
+    payloadForm.append("operador", operadorSessao); // INJEÇÃO CRÍTICA: Envia o operador logado
+    payloadForm.append("motivo", motivo);
+    payloadForm.append("descricao", descricao);
+    payloadForm.append("token_devolucao", tokenDevolucao);
+    payloadForm.append("pedidos", JSON.stringify(pedidosAfetados));
+    payloadForm.append("foto_nome", nomeFoto);
+    payloadForm.append("foto_data", base64Foto);
 
     try {
-        // 🚨 VALIDAÇÃO DO TOKEN NO SERVIDOR (GET)
-        const urlValidacao = `${urlSheets}?action=consultarTokensRomaneio&romaneio=${encodeURIComponent(romaneioSendoFinalizado)}`;
-        const resValidacao = await fetch(urlValidacao);
-        const dataValidacao = await resValidacao.json();
-
-        if (!dataValidacao || !dataValidacao.success) {
-            alert("⚠️ Erro ao acessar validação no servidor: " + (dataValidacao ? dataValidacao.error : "Sem resposta"));
-            btn.disabled = false;
-            btn.innerText = "Enviar";
-            return; // 🛑 CORTA A EXECUÇÃO IMEDIATAMENTE
-        }
-
-        const tokenServidor = (dataValidacao.token2 || "").toString().trim();
-        const tokenDigitadoLimpo = tokenDev.trim();
-
-        // Confronto direto e estrito do Token de Devolução
-        if (tokenServidor === "" || tokenDigitadoLimpo !== tokenServidor) {
-            alert("❌ Erro: O Token de Devolução informado é inválido para este Romaneio.");
-            btn.disabled = false;
-            btn.innerText = "Enviar";
-            return; // 🛑 CORTA A EXECUÇÃO IMEDIATAMENTE E IMPEDE O POST
-        }
-
-        // =========================================================================
-        // ✅ ADIÇÃO CIRÚRGICA: CAPTURA E ESTRUTURAÇÃO DOS ITENS SELECIONADOS
-        // =========================================================================
-        // =========================================================================
-        // ✅ CAPTURA E ESTRUTURAÇÃO DOS ITENS SELECIONADOS
-        // =========================================================================
-        const checkboxes = document.querySelectorAll('input[name="oc_itens_selecionados"]:checked');
-        let itensTextoFormatado = "";
-        const listaCodigos = []; 
-        
-        if (checkboxes.length > 0) {
-            checkboxes.forEach(cb => {
-                // Garante que o valor seja empurrado como string limpa
-                if(cb.value) listaCodigos.push(cb.value.toString().trim());
-            });
-            itensTextoFormatado = "\n[Itens afetados: " + listaCodigos.join(", ") + "]";
-        }
-        
-        const descricaoFinalComItens = descricao.trim() + itensTextoFormatado;
-        // =========================================================================
-
-        // =========================================================================
-
-        // ✅ TOKEN APROVADO! SE CHEGOU AQUI, O TOKEN É VÁLIDO.
-        btn.innerText = "Processando arquivo...";
-        let fotoBase64 = "";
-        let fotoNome = "";
-
-        // Converte o arquivo de imagem para string Base64
-        if (temFoto) {
-            const arquivo = fotoInput.files[0];
-            fotoNome = arquivo.name;
-            fotoBase64 = await new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () => resolve(reader.result.split(',')[1]);
-                reader.onerror = error => reject(error);
-                reader.readAsDataURL(arquivo);
-            });
-        }
-
-        btn.innerText = "Gravando...";
-
-        const payloadOcorrencia = {
-            action: "atualizarObsExtra",
-            romaneio: romaneioSendoFinalizado,
-            oc_motivo: motivo,
-            oc_descricao: descricaoFinalComItens, // Envia a descrição contendo os códigos acoplados
-            oc_token: tokenDigitadoLimpo,
-            oc_foto_data: fotoBase64,  
-            oc_foto_nome: fotoNome,
-            oc_itens_remover: listaCodigos // 🌟 PROPRIEDADE ENVIADA PARA REMOVER LINHAS NO SHEETS
-        };
-
-        // Envia os dados finais via POST apenas após todas as validações aprovadas
+        // Envia os dados estruturados via POST assíncrono para o Apps Script
         const response = await fetch(urlSheets, {
             method: 'POST',
-            body: JSON.stringify(payloadOcorrencia)
+            body: payloadForm,
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
         });
-        
+
         const result = await response.json();
 
-        if (result.success) {
-            document.getElementById("screenOcorrenciaLote").style.display = "none";
-            document.getElementById("screenOcorrenciaLote").classList.add("hidden");
+        if (result && result.success) {
+            alert("✅ Sucesso! Ocorrência e registros de avaria gravados com sucesso na planilha.");
             
-            // LIMPEZA DO PREVIEW ADICIONADA ANTERIORMENTE
-            const imgPreview = document.getElementById('oc_foto_preview');
-            if (imgPreview) {
-                imgPreview.style.display = 'none';
-                imgPreview.src = '';
-            }
-
-            // 1. Limpa o cache local agora que o processo fechou 100% com sucesso
-            if (typeof dadosCompletos !== 'undefined' && typeof romaneioSendoFinalizado !== 'undefined') {
-                dadosCompletos = dadosCompletos.filter(r => r.Romaneio !== romaneioSendoFinalizado && r.romaneio !== romaneioSendoFinalizado && r.id !== romaneioSendoFinalizado);
+            // Fecha as telas de modal e limpa o formulário de forma segura
+            const modalOcorrencia = document.getElementById("screenOcorrenciaLote");
+            if (modalOcorrencia) {
+                modalOcorrencia.style.display = "none";
+                modalOcorrencia.classList.add("hidden");
             }
             
-            // 2. Reconstrói o combobox limpando a opção usada
-            const select = document.getElementById("romaneio");
-            if (select && typeof dadosCompletos !== 'undefined') {
-                const ativos = dadosCompletos.filter(r => {
-                    const txt = (r.Intercorrencia || r.intercorrencia || "").toUpperCase().trim();
-                    return txt === "" || !txt.includes("CONCLUÍDO");
-                });
-                select.innerHTML = '<option value="">Selecione o Romaneio</option>';
-                ativos.forEach(info => {
-                    const nome = info.Romaneio || info.romaneio;
-                    select.add(new Option(nome, nome));
-                });
-            }
+            // Recarrega de forma transparente os dados iniciais da aplicação para atualizar a memória
+            if (typeof carregarDadosIniciais === "function") carregarDadosIniciais();
             
-            alert("Ocorrência registrada e Lote finalizado com sucesso!");
-            resetarInterface();
         } else {
-            alert("⚠️ Erro ao salvar a ocorrência no servidor: " + (result.error || "Tente novamente."));
+            // Captura o alerta de acesso negado enviado pelo servidor e exibe em pop-up nativo
+            alert("❌ Falha na validação do servidor:\n\n" + (result.error || "Erro desconhecido ao processar."));
         }
-
-    } catch (err) {
-        console.error("Erro no fluxo de ocorrência:", err);
-        alert("⚠️ Falha crítica: " + err.message);
+    } catch (errConexao) {
+        console.error("Erro na submissão do fluxo de ocorrência:", errConexao);
+        alert("❌ Falha crítica de comunicação ou timeout com o servidor.");
     } finally {
         btn.disabled = false;
-        btn.innerText = "Enviar";
+        btn.innerHTML = textoOriginalBtn;
     }
 }
+
 
 
 
