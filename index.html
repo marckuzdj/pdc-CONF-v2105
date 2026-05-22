@@ -282,7 +282,7 @@
 
 <!-- 1. TELA DE LOGIN -->
 <div id="screen-login" class="card"> <!-- Adicionado a classe card aqui -->
-    <h3>Passagem de Carga | Conferência v3</h3>
+    <h3>Passagem de Carga | Conferência v4</h3>
     <label>E-mail</label>
     <input type="email" id="login-user" placeholder="seu@email.com">
     
@@ -2011,55 +2011,61 @@ function pularOcorrenciaEFinalizar() {
 async function enviarOcorrenciaFluxo() {
     const btn = document.getElementById("btnEnviarOcorrenciaFinal");
     
-    // Captura os elementos nativos do formulário de ocorrência
+    // Captura os dados inseridos e selecionados no modal de ocorrência
     const motivo = document.getElementById("oc_motivo").value;
     const descricao = document.getElementById("oc_descricao").value.trim();
     const tokenDevolucao = document.getElementById("oc_token_devolucao").value.trim();
-    const inputRomaneio = document.getElementById("romaneio");
-    const romaneioId = inputRomaneio ? inputRomaneio.value.toString().trim().toUpperCase() : "";
+    
+    // Captura o Romaneio que está ativo na tela de conferência híbrida
+    const selectRomaneioMain = document.getElementById("select-romaneio") || document.getElementById("romaneio");
+    const romaneioId = selectRomaneioMain ? selectRomaneioMain.value.toString().trim().toUpperCase() : "";
 
-    // 🔒 CAPTURA CIRÚRGICA DE SEGURANÇA: Extrai a transportadora/operador salva no logon
-    const selectTranspLogin = document.getElementById("login-transp");
+    // 🔒 CAPTURA CIRÚRGICA DE SEGURANÇA: Extrai o operador selecionado na tela de login
+    const selectTranspLogin = document.getElementById("login-transp") || document.querySelector("#screen-login select");
     const operadorSessao = selectTranspLogin ? selectTranspLogin.value.toString().trim() : "";
 
-    // Validações básicas de preenchimento obrigatório
+    // Validações básicas de preenchimento obrigatório para evitar envios em branco
     if (!romaneioId) return alert("⚠️ Identificador de romaneio inválido ou ausente.");
-    if (!motivo) return alert("⚠️ Por favor, selecione o motivo da retenção.");
-    if (!tokenDevolucao) return alert("⚠️ É obrigatório informar o Token de Devolução para autorização.");
+    if (!motivo) return alert("⚠️ Por favor, selecione o motivo da retenção/avaria.");
+    if (!tokenDevolucao) return alert("⚠️ É obrigatório informar o Token de Devolução correspondente.");
 
+    // Ativa o estado visual de carregamento (Loading) no botão
     btn.disabled = true;
     const textoOriginalBtn = btn.innerHTML;
-    btn.innerHTML = '<div class="spinner"></div> Gravando...';
+    btn.innerHTML = '🔄 Gravando ocorrência...';
 
     // Coleta todos os checkboxes de pedidos marcados com divergência no painel
-    const checkboxesPedidos = document.querySelectorAll("input[name='adm_itens_selecionados']:checked, #oc_container_fornec input[type='checkbox']:checked");
+    const checkboxesPedidos = document.querySelectorAll("input[name='adm_itens_selecionados']:checked, #containerListaDev input[type='checkbox']:checked");
     const pedidosAfetados = Array.from(checkboxesPedidos).map(cb => cb.value.toString().trim());
 
-    // Captura o arquivo de imagem anexado pelo usuário
-    const inputFoto = document.getElementById("oc_foto");
+    // Processamento do upload da foto da avaria
+    const inputFoto = document.getElementById("oc_foto") || document.getElementById("foto-evidencia");
     let base64Foto = "";
     let nomeFoto = "";
 
     if (inputFoto && inputFoto.files.length > 0) {
         const arquivo = inputFoto.files[0];
         nomeFoto = arquivo.name;
-        // Função auxiliar interna para converter imagem em String Base64 para envio assíncrono
+        // Promessa assíncrona para converter o arquivo físico em string Base64 limpa
         base64Foto = await new Promise((resolve) => {
             const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result.split(",")[1]);
+            reader.onloadend = () => {
+                // Remove o cabeçalho 'data:image/jpeg;base64,' e isola apenas o conteúdo binário
+                resolve(reader.result.split(",")[1]);
+            };
             reader.readAsDataURL(arquivo);
         });
     } else {
         btn.disabled = false;
         btn.innerHTML = textoOriginalBtn;
-        return alert("⚠️ Foto da Evidência/Avaria é obrigatória (* OBRIGATÓRIO).");
+        return alert("⚠️ A foto da evidência/avaria é um item obrigatório (* OBRIGATÓRIO).");
     }
 
-    // Estrutura o Payload multipart/form-data usando o padrão clássico URLSearchParams
+    // Monta o payload estruturado utilizando a especificação x-www-form-urlencoded
     const payloadForm = new URLSearchParams();
-    payloadForm.append("action", "salvarOcorrenciaRomaneio"); // Ajuste para a sua action real de salvamento se necessário
+    payloadForm.append("action", "salvarOcorrenciaRomaneio"); 
     payloadForm.append("romaneio", romaneioId);
-    payloadForm.append("operador", operadorSessao); // INJEÇÃO CRÍTICA: Envia o operador logado
+    payloadForm.append("operador", operadorSessao); // INJEÇÃO DE CHAVE MESTRE: Envia o operador do login
     payloadForm.append("motivo", motivo);
     payloadForm.append("descricao", descricao);
     payloadForm.append("token_devolucao", tokenDevolucao);
@@ -2068,7 +2074,7 @@ async function enviarOcorrenciaFluxo() {
     payloadForm.append("foto_data", base64Foto);
 
     try {
-        // Envia os dados estruturados via POST assíncrono para o Apps Script
+        // Dispara a requisição assíncrona POST para o Google Apps Script usando a urlSheets global mapeada
         const response = await fetch(urlSheets, {
             method: 'POST',
             body: payloadForm,
@@ -2078,30 +2084,36 @@ async function enviarOcorrenciaFluxo() {
         const result = await response.json();
 
         if (result && result.success) {
-            alert("✅ Sucesso! Ocorrência e registros de avaria gravados com sucesso na planilha.");
+            alert("✅ Sucesso! Ocorrência registrada e salva com sucesso na planilha.");
             
-            // Fecha as telas de modal e limpa o formulário de forma segura
-            const modalOcorrencia = document.getElementById("screenOcorrenciaLote");
+            // Fecha e oculta o modal de ocorrência restaurando a interface do painel
+            const modalOcorrencia = document.getElementById("screen-intercorrencia") || document.getElementById("modalOcorrencia");
             if (modalOcorrencia) {
                 modalOcorrencia.style.display = "none";
                 modalOcorrencia.classList.add("hidden");
             }
             
-            // Recarrega de forma transparente os dados iniciais da aplicação para atualizar a memória
-            if (typeof carregarDadosIniciais === "function") carregarDadosIniciais();
+            // Força a atualização da lista operacional para refletir o status atualizado do romaneio
+            if (typeof forcarUpdateLista === "function") {
+                forcarUpdateLista();
+            } else if (typeof carregarDadosIniciais === "function") {
+                carregarDadosIniciais();
+            }
             
         } else {
-            // Captura o alerta de acesso negado enviado pelo servidor e exibe em pop-up nativo
-            alert("❌ Falha na validação do servidor:\n\n" + (result.error || "Erro desconhecido ao processar."));
+            // Exibe o alerta amigável de Acesso Negado ou outro erro retornado pelo servidor
+            alert("❌ Falha no processamento do servidor:\n\n" + (result.error || "Erro desconhecido."));
         }
     } catch (errConexao) {
-        console.error("Erro na submissão do fluxo de ocorrência:", errConexao);
-        alert("❌ Falha crítica de comunicação ou timeout com o servidor.");
+        console.error("Erro crítico na submissão da ocorrência:", errConexao);
+        alert("❌ Erro de conexão ou timeout com o servidor.");
     } finally {
+        // Restaura o estado operacional do botão
         btn.disabled = false;
         btn.innerHTML = textoOriginalBtn;
     }
 }
+
 
 
 
